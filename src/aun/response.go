@@ -10,18 +10,16 @@ import (
 const ACCEPTKEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type Response struct {
-	req          *Request
-	ResponseType int
+	req *Request
 }
 
-func NewResponse(req *Request, responseType int) *Response {
+func NewResponse(req *Request) *Response {
 	return &Response{
-		req:          req,
-		ResponseType: responseType,
+		req: req,
 	}
 }
 
-func (r *Response) ToBytes() []byte {
+func (r *Response) Bytes() []byte {
 	buffer := []string{
 		fmt.Sprintf("%s 101 Switching Protocols", r.req.Version),
 		"Upgrade: websocket",
@@ -34,7 +32,7 @@ func (r *Response) ToBytes() []byte {
 }
 
 func (r *Response) genAcceptKey() string {
-	key := strings.TrimSpace(r.req.GetHeader("Sec-WebSocket-Key"))
+	key := strings.TrimSpace(r.req.Header("Sec-WebSocket-Key"))
 	key += ACCEPTKEY
 	enc := sha1.Sum([]byte(key))
 

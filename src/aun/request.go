@@ -5,14 +5,13 @@ import (
 )
 
 type Request struct {
-	RequestType int
-	Method      string
-	Path        string
-	Version     string
-	Headers     map[string]string
+	Method  string
+	Path    string
+	Version string
+	Headers map[string]string
 }
 
-func NewRequest(message string, requestType int) *Request {
+func NewRequest(message string) *Request {
 	list := strings.Split(message, "\r\n")
 
 	// first line is request line
@@ -29,11 +28,10 @@ func NewRequest(message string, requestType int) *Request {
 	}
 
 	return &Request{
-		RequestType: requestType,
-		Method:      parts[0],
-		Path:        parts[1],
-		Version:     parts[2],
-		Headers:     headers,
+		Method:  parts[0],
+		Path:    parts[1],
+		Version: parts[2],
+		Headers: headers,
 	}
 }
 
@@ -43,7 +41,7 @@ func (r *Request) HasHeader(key string) (ok bool) {
 	return
 }
 
-func (r *Request) GetHeader(key string) (header string) {
+func (r *Request) Header(key string) (header string) {
 	header, _ = r.Headers[key]
 
 	return
