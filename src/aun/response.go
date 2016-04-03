@@ -10,6 +10,7 @@ import (
 const ACCEPTKEY = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type Response struct {
+	MessageReadable
 	req *Request
 }
 
@@ -19,7 +20,11 @@ func NewResponse(req *Request) *Response {
 	}
 }
 
-func (r *Response) Bytes() []byte {
+func (r *Response) getData() []byte {
+	return r.Headers()
+}
+
+func (r *Response) Headers() []byte {
 	buffer := []string{
 		fmt.Sprintf("%s 101 Switching Protocols", r.req.Version),
 		"Upgrade: websocket",
@@ -27,8 +32,7 @@ func (r *Response) Bytes() []byte {
 		fmt.Sprintf("Sec-WebSocket-Accept: %s", r.genAcceptKey()),
 	}
 
-	fmt.Println(strings.Join(buffer, "\r\n"))
-	return []byte(strings.Join(buffer, "\r\n"))
+	return []byte(strings.Join(buffer, "\r\n") + "\r\n\r\n")
 }
 
 func (r *Response) genAcceptKey() string {

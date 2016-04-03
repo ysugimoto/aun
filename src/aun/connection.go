@@ -2,6 +2,7 @@ package aun
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -19,12 +20,13 @@ type Connection struct {
 	maxDataSize int
 	state       int
 	conn        net.Conn
-	Read        chan *Message
-	Write       chan *Message
+	Read        chan MessageReadable
+	Write       chan MessageReadable
 	Close       chan struct{}
-	broadcast   chan *Message
+	broadcast   chan MessageReadable
 	manager     chan *Connection
 	join        chan *Connection
+	frameStack  FrameStack
 }
 
 func NewConnection(conn net.Conn, maxDataSize int) *Connection {
@@ -36,13 +38,14 @@ func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 		state:       INITIALIZE,
 		maxDataSize: maxDataSize,
 		conn:        conn,
-		Read:        make(chan *Message),
-		Write:       make(chan *Message),
+		frameStack:  FrameStack{},
+		Read:        make(chan MessageReadable, 1),
+		Write:       make(chan MessageReadable, 1),
 		Close:       make(chan struct{}),
 	}
 }
 
-func (c *Connection) Wait(broadCast chan *Message, join, manager chan *Connection) {
+func (c *Connection) Wait(broadCast chan MessageReadable, join, manager chan *Connection) {
 	c.broadcast = broadCast
 	c.manager = manager
 	c.join = join
@@ -63,16 +66,40 @@ OUTER:
 					c.join <- c
 				}
 			case CONNECTED:
-				c.broadcast <- msg
+				m, err := NewMessageFrame(msg.getData())
+				if err != nil {
+					fmt.Println(err)
+					break OUTER
+				}
+
+				if err := c.handleFrame(m.Frame); err != nil {
+					fmt.Println(err)
+					break OUTER
+				}
 			}
-			c.conn.SetReadDeadline(time.Now().Add(1 * time.Minute))
-			c.conn.SetWriteDeadline(time.Now().Add(1 * time.Minute))
+			go c.readSocket()
 		case msg := <-c.Write:
-			c.conn.Write([]byte(msg.Data))
+			data := msg.getData()
+			size := len(data)
+			var (
+				written int
+				err     error
+			)
+			for {
+				if written, err = c.conn.Write(data[written:]); err != nil {
+					fmt.Println(err)
+					break OUTER
+				}
+				if written == size {
+					break
+				}
+			}
 		case <-c.Close:
 			break OUTER
 		}
+		c.conn.SetDeadline(time.Now().Add(1 * time.Minute))
 	}
+	fmt.Println("connection will closing")
 }
 
 func (c *Connection) readSocket() {
@@ -87,19 +114,50 @@ func (c *Connection) readSocket() {
 		dat = append(dat, buf[:size]...)
 		if len(dat) > 0 && size != c.maxDataSize {
 			c.Read <- NewMessage(dat)
+			break
 		}
 	}
 }
 
-func (c *Connection) handshake(msg *Message) error {
+func (c *Connection) handshake(msg MessageReadable) error {
 	c.state = OPENING
 
-	request := NewRequest(string(msg.Data))
+	request := NewRequest(string(msg.getData()))
 	if !isValidHandshake(request) {
+		fmt.Println("Error")
 		c.Close <- struct{}{}
 		return errors.New("Invalid handshake request")
 	}
 	response := NewResponse(request)
-	c.Write <- NewMessage(response.Bytes())
+	c.Write <- response
+	c.state = CONNECTED
+	return nil
+}
+
+func (c *Connection) handleFrame(frame *Frame) error {
+	switch frame.Opcode {
+	// text / binary frame
+	case 1, 2:
+		c.frameStack = append(c.frameStack, frame)
+		if frame.Fin == 0 {
+			return nil
+		}
+		message := c.frameStack.synthesize()
+		c.frameStack = FrameStack{}
+		_, err := BuildFrame(message, c.maxDataSize)
+		if err != nil {
+			return err
+		}
+		//for _, frame := range frames {
+		//	c.broadcast <- NewMessage(frame.toFrameBytes())
+		//}
+	// closing frame
+	case 8:
+		c.Close <- struct{}{}
+	// ping frame
+	case 9:
+		c.broadcast <- NewMessage(NewPongFrame().toFrameBytes())
+	}
+
 	return nil
 }

@@ -34,7 +34,6 @@ func isValidHandshake(req *Request) bool {
 		return false
 	}
 	key, err := base64.StdEncoding.DecodeString(req.Header("Sec-WebSocket-Key"))
-	fmt.Println(key)
 	if err != nil || len(key) != 16 {
 		fmt.Println(7)
 		return false
