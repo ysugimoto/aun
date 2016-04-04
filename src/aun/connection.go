@@ -144,13 +144,13 @@ func (c *Connection) handleFrame(frame *Frame) error {
 		}
 		message := c.frameStack.synthesize()
 		c.frameStack = FrameStack{}
-		_, err := BuildFrame(message, c.maxDataSize)
+		frames, err := BuildFrame(message, c.maxDataSize)
 		if err != nil {
 			return err
 		}
-		//for _, frame := range frames {
-		//	c.broadcast <- NewMessage(frame.toFrameBytes())
-		//}
+		for _, frame := range frames {
+			c.broadcast <- NewMessage(frame.toFrameBytes())
+		}
 	// closing frame
 	case 8:
 		c.Close <- struct{}{}

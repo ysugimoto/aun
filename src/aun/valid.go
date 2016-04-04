@@ -21,11 +21,11 @@ func isValidHandshake(req *Request) bool {
 		fmt.Println(3)
 		return false
 	}
-	if !req.HasHeader("Upgrade") || strings.ToLower(req.Header("Upgrade")) != "websocket" {
+	if !req.HasHeader("Upgrade") || !strings.Contains(strings.ToLower(req.Header("Upgrade")), "websocket") {
 		fmt.Println(4)
 		return false
 	}
-	if !req.HasHeader("Connection") || strings.ToLower(req.Header("Connection")) != "upgrade" {
+	if !req.HasHeader("Connection") || !strings.Contains(strings.ToLower(req.Header("Connection")), "upgrade") {
 		fmt.Println(5)
 		return false
 	}

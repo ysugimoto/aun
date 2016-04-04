@@ -45,27 +45,23 @@ func (s *Server) Listen(maxDataSize int) (err error) {
 	for {
 		select {
 		case msg := <-s.broadcast:
-			fmt.Println("broadcast")
 			s.mutex.Lock()
 			for c, _ := range s.connections {
 				c.Write <- msg
 			}
 			s.mutex.Unlock()
 		case c := <-s.manager:
-			fmt.Println("leave")
 			s.mutex.Lock()
 			if _, ok := s.connections[c]; ok {
 				delete(s.connections, c)
 			}
 			s.mutex.Unlock()
 		case c := <-s.join:
-			fmt.Println("Join")
 			s.mutex.Lock()
 			s.connections[c] = true
 			s.mutex.Unlock()
 		}
 	}
-	fmt.Println("close")
 	return nil
 }
 

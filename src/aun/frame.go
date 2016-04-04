@@ -1,10 +1,5 @@
 package aun
 
-import (
-	"fmt"
-	"strconv"
-)
-
 // Message frame spec:
 //
 // 0                   1                   2                   3
@@ -25,6 +20,10 @@ import (
 // + - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - +
 // |                     Payload Data continued ...                |
 // +---------------------------------------------------------------+
+
+import (
+	"encoding/binary"
+)
 
 type Frame struct {
 	Fin           int
@@ -101,41 +100,24 @@ func (f *Frame) parse(buffer []byte) error {
 	f.Mask = (bits >> 7) & 1
 	f.PayloadLength = bits & 0x7F
 
-	fmt.Println(bits, f.PayloadLength)
 	index := 2
 	switch {
 	case f.PayloadLength == 126:
-		bin := ""
-		for i := 0; i < 2; i++ {
-			bin += fmt.Sprintf("%b", buffer[index+i])
-		}
-		length, err := strconv.ParseInt(bin, 2, 0)
-		if err != nil {
-			return err
-		}
-		f.PayloadLength = int(length)
+		n := binary.BigEndian.Uint16(buffer[index:(index + 2)])
+		f.PayloadLength = int(n)
 		index += 2
 	case f.PayloadLength == 127:
-		bin := ""
-		for i := 0; i < 8; i++ {
-			bin += fmt.Sprintf("%b", buffer[index+i])
-		}
-		length, err := strconv.ParseInt(bin, 2, 0)
-		if err != nil {
-			return err
-		}
-		f.PayloadLength = int(length)
+		n := binary.BigEndian.Uint64(buffer[index:(index + 8)])
+		f.PayloadLength = int(n)
 		index += 8
 	}
 
 	if f.Mask > 0 {
 		f.MaskingKey = buffer[index:(index + 4)]
 		index += 4
-	}
-
-	if f.Mask > 0 {
 		payload := buffer[index:(index + f.PayloadLength)]
-		for i := 0; i < len(payload); i++ {
+		size := len(payload)
+		for i := 0; i < size; i++ {
 			f.PayloadData = append(
 				f.PayloadData,
 				byte((int(payload[i]) ^ int(f.MaskingKey[i%4]))),
@@ -144,8 +126,6 @@ func (f *Frame) parse(buffer []byte) error {
 	} else {
 		f.PayloadData = buffer[index:(index + f.PayloadLength)]
 	}
-
-	fmt.Println(string(f.PayloadData))
 
 	return nil
 }
@@ -177,7 +157,7 @@ func (f *Frame) toFrameBytes() (data []byte) {
 			byte((f.PayloadLength>>8)&0xFF),
 			byte((f.PayloadLength)&0xFF),
 		)
-	case f.PayloadLength > 126 && f.PayloadLength < 65535:
+	case f.PayloadLength > 126 && f.PayloadLength <= 65535:
 		bin |= 126
 		data = append(data, byte(bin))
 		// extra payload length of 2 bytes
