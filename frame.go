@@ -26,6 +26,8 @@ import (
 )
 
 type Frame struct {
+	// embeded interface
+	Readable
 	Fin           int
 	RSV1          int
 	RSV2          int
@@ -37,10 +39,12 @@ type Frame struct {
 	PayloadData   []byte
 }
 
+// Create new frame
 func NewFrame() *Frame {
 	return &Frame{}
 }
 
+// Create "pong" frame
 func NewPongFrame() *Frame {
 	return &Frame{
 		Fin:           1,
@@ -54,6 +58,7 @@ func NewPongFrame() *Frame {
 	}
 }
 
+// Create Message frame for S->C sending
 func BuildFrame(message []byte, maxSize int) (FrameStack, error) {
 	stack := FrameStack{}
 
@@ -75,6 +80,9 @@ func BuildFrame(message []byte, maxSize int) (FrameStack, error) {
 	return stack, nil
 }
 
+// Create single message frame.
+// If finBit is equal to zero,
+// Message was split deriverling.
 func BuildSingleFrame(message []byte, finBit int, opcode int) (*Frame, error) {
 	return &Frame{
 		Fin:           finBit,
@@ -88,6 +96,7 @@ func BuildSingleFrame(message []byte, finBit int, opcode int) (*Frame, error) {
 	}, nil
 }
 
+// Parse them incoming message frame.
 func (f *Frame) parse(buffer []byte) error {
 	bits := int(buffer[0])
 	f.Fin = (bits >> 7) & 1
@@ -102,16 +111,20 @@ func (f *Frame) parse(buffer []byte) error {
 
 	index := 2
 	switch {
+	// payload length = 126, using length of 2 bytes
 	case f.PayloadLength == 126:
 		n := binary.BigEndian.Uint16(buffer[index:(index + 2)])
 		f.PayloadLength = int(n)
 		index += 2
+	// payload length = 127, using length of 8 bytes
 	case f.PayloadLength == 127:
 		n := binary.BigEndian.Uint64(buffer[index:(index + 8)])
 		f.PayloadLength = int(n)
 		index += 8
 	}
 
+	// Masking check.
+	// C->S message has always need to be masking.
 	if f.Mask > 0 {
 		f.MaskingKey = buffer[index:(index + 4)]
 		index += 4
@@ -120,6 +133,8 @@ func (f *Frame) parse(buffer []byte) error {
 		for i := 0; i < size; i++ {
 			f.PayloadData = append(
 				f.PayloadData,
+				// Unmasking payload:
+				// payload-i ^ masking-key-j mod 4
 				byte((int(payload[i]) ^ int(f.MaskingKey[i%4]))),
 			)
 		}
@@ -130,6 +145,12 @@ func (f *Frame) parse(buffer []byte) error {
 	return nil
 }
 
+// Implement Readable interface
+func (f *Frame) getData() []byte {
+	return f.toFrameBytes()
+}
+
+// Binarify the frame to send.
 func (f *Frame) toFrameBytes() (data []byte) {
 	bin := 0
 	bin |= (f.Fin << 7)
@@ -172,5 +193,4 @@ func (f *Frame) toFrameBytes() (data []byte) {
 	}
 	data = append(data, f.PayloadData...)
 	return
-
 }

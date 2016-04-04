@@ -8,29 +8,43 @@ import (
 	"time"
 )
 
-const (
-	INITIALIZE = iota
-	OPENING
-	CONNECTED
-	CLOSING
-	CLOSED
-)
-
+// Client connection socket wrapper struct.
 type Connection struct {
+	// socket max buffer size
 	maxDataSize int
-	state       int
-	conn        net.Conn
-	Read        chan MessageReadable
-	Write       chan MessageReadable
-	Close       chan struct{}
-	broadcast   chan MessageReadable
-	manager     chan *Connection
-	join        chan *Connection
-	frameStack  FrameStack
+
+	// connection status
+	state int
+
+	// TCP socket connection
+	conn net.Conn
+
+	// Read message channel
+	Read chan Readable
+
+	// Send socket channel
+	Write chan Readable
+
+	// Close channel
+	Close chan struct{}
+
+	// broadcasting channnel ( supply from Server )
+	broadcast chan Readable
+
+	// leave channnel ( supply from Server )
+	manager chan *Connection
+
+	// join channnel ( supply from Server )
+	join chan *Connection
+
+	// Frame queue stack ( treats FIN = 0 message queue )
+	frameStack FrameStack
 }
 
+// Create new connection.
 func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 	if maxDataSize == 0 {
+		// Default buffer size is 1024 bytes.
 		maxDataSize = 1024
 	}
 
@@ -39,13 +53,14 @@ func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 		maxDataSize: maxDataSize,
 		conn:        conn,
 		frameStack:  FrameStack{},
-		Read:        make(chan MessageReadable, 1),
-		Write:       make(chan MessageReadable, 1),
+		Read:        make(chan Readable, 1),
+		Write:       make(chan Readable, 1),
 		Close:       make(chan struct{}),
 	}
 }
 
-func (c *Connection) Wait(broadCast chan MessageReadable, join, manager chan *Connection) {
+// Waiting incoming message, receive channel.
+func (c *Connection) Wait(broadCast chan Readable, join, manager chan *Connection) {
 	c.broadcast = broadCast
 	c.manager = manager
 	c.join = join
@@ -54,30 +69,37 @@ func (c *Connection) Wait(broadCast chan MessageReadable, join, manager chan *Co
 	c.loop()
 }
 
+// Main channael message waiting
 func (c *Connection) loop() {
 	defer c.conn.Close()
+	// Outer loop label
 OUTER:
 	for {
 		select {
+		// Message incoming
 		case msg := <-c.Read:
 			switch c.state {
+			// When state is INITIALIZE, process handshake.
 			case INITIALIZE:
 				if err := c.handshake(msg); err == nil {
 					c.join <- c
 				}
+			// When state is CONNECTED, incoming message.
 			case CONNECTED:
-				m, err := NewMessageFrame(msg.getData())
+				frame := NewFrame()
+				err := frame.parse(msg.getData())
 				if err != nil {
 					fmt.Println(err)
 					break OUTER
 				}
 
-				if err := c.handleFrame(m.Frame); err != nil {
+				if err := c.handleFrame(frame); err != nil {
 					fmt.Println(err)
 					break OUTER
 				}
 			}
 			go c.readSocket()
+		// Message sending
 		case msg := <-c.Write:
 			data := msg.getData()
 			size := len(data)
@@ -94,14 +116,15 @@ OUTER:
 					break
 				}
 			}
+		// Connection closing
 		case <-c.Close:
 			break OUTER
 		}
 		c.conn.SetDeadline(time.Now().Add(1 * time.Minute))
 	}
-	fmt.Println("connection will closing")
 }
 
+// Read message from socket.
 func (c *Connection) readSocket() {
 	dat := make([]byte, 0)
 	buf := make([]byte, c.maxDataSize)
@@ -119,29 +142,35 @@ func (c *Connection) readSocket() {
 	}
 }
 
-func (c *Connection) handshake(msg MessageReadable) error {
+// Processing handshake.
+func (c *Connection) handshake(msg Readable) error {
 	c.state = OPENING
 
 	request := NewRequest(string(msg.getData()))
-	if !isValidHandshake(request) {
-		fmt.Println("Error")
+
+	// Check valid handshke request
+	if !request.isValid() {
 		c.Close <- struct{}{}
 		return errors.New("Invalid handshake request")
 	}
 	response := NewResponse(request)
 	c.Write <- response
+	// state changed to CONNECTED
 	c.state = CONNECTED
 	return nil
 }
 
+// Processing incoming message frame
 func (c *Connection) handleFrame(frame *Frame) error {
 	switch frame.Opcode {
+
 	// text / binary frame
 	case 1, 2:
 		c.frameStack = append(c.frameStack, frame)
 		if frame.Fin == 0 {
 			return nil
 		}
+		// synthesize queueing frames (if exists)
 		message := c.frameStack.synthesize()
 		c.frameStack = FrameStack{}
 		frames, err := BuildFrame(message, c.maxDataSize)
@@ -151,9 +180,11 @@ func (c *Connection) handleFrame(frame *Frame) error {
 		for _, frame := range frames {
 			c.broadcast <- NewMessage(frame.toFrameBytes())
 		}
+
 	// closing frame
 	case 8:
 		c.Close <- struct{}{}
+
 	// ping frame
 	case 9:
 		c.broadcast <- NewMessage(NewPongFrame().toFrameBytes())
