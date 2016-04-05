@@ -75,7 +75,7 @@ And connect from Browser or some clients:
 
 ```
 let ws = new WebSocket("wss://localhost:10021");
-ws.onmessage = (msg) {
+ws.onmessage = (msg) => {
     console.log(msg);
 };
 ws.send("Hello, aun!");
