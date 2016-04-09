@@ -10,7 +10,7 @@ Get the package:
 $ go get github.com/ysugimoto/aun
 ```
 
-### Usage
+### Basic Usage
 
 #### TCP
 
@@ -80,6 +80,32 @@ ws.onmessage = (msg) => {
 };
 ws.send("Hello, aun!");
 ```
+
+### CLI command
+
+Get the command package:
+
+```
+$ go get github.com/ysugimoto/aun/cmd/aun
+```
+
+Run with some options:
+
+| option | description                         | default   |
+|--------|-------------------------------------|-----------|
+|    -h  | Listen host                         | 127.0.0.1 |
+|    -p  | Listen port                         | 12345     |
+| --tls  | Using TLS                           | false     |
+| --key  | key file path (with `--tls` option) | -         |
+| --pem  | pem file path (with `--tls` option) | -         |
+
+for example:
+
+```
+$ aun -h 0.0.0.0 -p 9999
+```
+
+will start server `0.0.0.0:9999`.
 
 ### License
 
