@@ -2,9 +2,13 @@ package aun
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 // TCP server with managing clients,
@@ -19,6 +23,9 @@ type Server struct {
 	// WebSocket clients
 	connections map[*Connection]bool
 
+	// Max buffer size per message
+	maxDataSize int
+
 	// Broadcast channel
 	broadcast chan Readable
 
@@ -30,6 +37,14 @@ type Server struct {
 
 	// Map Muten
 	mutex *sync.Mutex
+
+	// Exit channel
+	Exit chan int
+
+	// noop default handlers
+	OnMessage MessageHandler
+	OnClose   CloseHandler
+	OnConnect ConnectHandler
 }
 
 // Create New WebSocket Server.
@@ -46,6 +61,7 @@ func NewServer(host string, port int) (*Server, error) {
 		manager:     make(chan *Connection),
 		join:        make(chan *Connection),
 		mutex:       new(sync.Mutex),
+		Exit:        make(chan int, 1),
 	}, nil
 }
 
@@ -54,7 +70,7 @@ func NewServer(host string, port int) (*Server, error) {
 //
 // Example:
 //    srv := aun.NewServer("127.0.0.1", 9999)
-//    src.Liten(1024) // listen with 1024 bytes message buffer
+//    srv.Liten(1024) // listen with 1024 bytes message buffer
 func (s *Server) Listen(maxDataSize int) (err error) {
 	s.socket, err = net.Listen("tcp", s.addr.String())
 	if err != nil {
@@ -76,7 +92,7 @@ func (s *Server) Listen(maxDataSize int) (err error) {
 //        return
 //    }
 //    config := &tls.Config{Certificates: []tls.Certificate{cer}}
-//    src.LitenTLS(1024, config) // listen with 1024 bytes message buffer
+//    srv.LitenTLS(1024, config) // listen with 1024 bytes message buffer
 func (s *Server) ListenTLS(maxDataSize int, ssl *tls.Config) (err error) {
 	s.socket, err = tls.Listen("tcp", s.addr.String(), ssl)
 	if err != nil {
@@ -91,16 +107,26 @@ func (s *Server) ListenTLS(maxDataSize int, ssl *tls.Config) (err error) {
 func (s *Server) serve(maxDataSize int) {
 	defer s.socket.Close()
 
+	s.maxDataSize = maxDataSize
+
 	// Loop and accepting client connection.
 	// Running with goroutine
 	go s.acceptLoop(maxDataSize)
 
+	// observe signal event
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL)
+
+MAIN:
 	// Channel selection
 	for {
 		select {
 		// handle the broadcast
 		case msg := <-s.broadcast:
 			s.mutex.Lock()
+			if s.OnMessage != nil {
+				s.OnMessage(msg.getData())
+			}
 			for c, _ := range s.connections {
 				c.Write <- msg
 			}
@@ -109,6 +135,9 @@ func (s *Server) serve(maxDataSize int) {
 		// handle the left client
 		case c := <-s.manager:
 			s.mutex.Lock()
+			if s.OnClose != nil {
+				s.OnClose(c)
+			}
 			if _, ok := s.connections[c]; ok {
 				delete(s.connections, c)
 			}
@@ -117,8 +146,17 @@ func (s *Server) serve(maxDataSize int) {
 		// handle the join client
 		case c := <-s.join:
 			s.mutex.Lock()
+			if s.OnConnect != nil {
+				s.OnConnect(c)
+			}
 			s.connections[c] = true
 			s.mutex.Unlock()
+
+		case <-s.Exit:
+			break MAIN
+
+		case sig := <-signalChan:
+			s.handleSignal(sig)
 		}
 	}
 }
@@ -136,4 +174,45 @@ func (s *Server) acceptLoop(maxDataSize int) {
 		c := NewConnection(conn, maxDataSize)
 		go c.Wait(s.broadcast, s.join, s.manager)
 	}
+}
+
+// handling OS Signal
+func (s *Server) handleSignal(sig os.Signal) {
+	switch sig {
+	case syscall.SIGINT, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGTERM:
+		fmt.Println("Terminating...")
+
+		// graceful closing
+		for c, _ := range s.connections {
+			c.Close <- struct{}{}
+		}
+
+		s.Exit <- 1
+	}
+}
+
+// Broadcast tp all clients
+func (s *Server) Notify(message []byte) error {
+	frames, err := BuildFrame(message, s.maxDataSize)
+	if err != nil {
+		return err
+	}
+	for _, frame := range frames {
+		s.broadcast <- NewMessage(frame.toFrameBytes())
+	}
+
+	return nil
+}
+
+// Send message to destination connection
+func (s *Server) NotifyTo(message []byte, to *Connection) error {
+
+	// Check client is connected
+	if _, ok := s.connections[to]; !ok {
+		return errors.New("Client not connected, abort send message.")
+	}
+
+	to.Write <- NewMessage(message)
+
+	return nil
 }

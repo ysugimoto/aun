@@ -1,6 +1,8 @@
 package aun
 
 import (
+	"crypto/rand"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +12,10 @@ import (
 
 // Client connection socket wrapper struct.
 type Connection struct {
+
+	// connection ID (probably unique)
+	Id string
+
 	// socket max buffer size
 	maxDataSize int
 
@@ -41,6 +47,12 @@ type Connection struct {
 	frameStack FrameStack
 }
 
+func generateSessionId() string {
+	b := make([]byte, 32)
+	io.ReadFull(rand.Reader, b)
+	return fmt.Sprintf("%x", sha1.Sum(b))
+}
+
 // Create new connection.
 func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 	if maxDataSize == 0 {
@@ -49,6 +61,7 @@ func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 	}
 
 	return &Connection{
+		Id:          generateSessionId(),
 		state:       INITIALIZE,
 		maxDataSize: maxDataSize,
 		conn:        conn,
