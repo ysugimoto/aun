@@ -94,7 +94,8 @@ OUTER:
 			switch c.state {
 			// When state is INITIALIZE, process handshake.
 			case INITIALIZE:
-				if err := c.handshake(msg); err == nil {
+				req := NewRequest(string(msg.getData()))
+				if err := c.handshake(req); err == nil {
 					c.join <- c
 				}
 			// When state is CONNECTED, incoming message.
@@ -156,10 +157,8 @@ func (c *Connection) readSocket() {
 }
 
 // Processing handshake.
-func (c *Connection) handshake(msg Readable) error {
+func (c *Connection) handshake(request *Request) error {
 	c.state = OPENING
-
-	request := NewRequest(string(msg.getData()))
 
 	// Check valid handshke request
 	if !request.isValid() {

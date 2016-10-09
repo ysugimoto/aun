@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -215,4 +216,65 @@ func (s *Server) NotifyTo(message []byte, to *Connection) error {
 	to.Write <- NewMessage(message)
 
 	return nil
+}
+
+type HandlerServer struct {
+	server   *Server
+	callback HandlerCallback
+}
+type HandlerCallback func(*Connection)
+
+func NewHandlerServer(handler HandlerCallback) *HandlerServer {
+	return &HandlerServer{
+		callback: handler,
+		server: &Server{
+			connections: make(map[*Connection]bool),
+			broadcast:   make(chan Readable),
+			manager:     make(chan *Connection),
+			join:        make(chan *Connection),
+			mutex:       new(sync.Mutex),
+			Exit:        make(chan int, 1),
+		},
+	}
+}
+
+func (hs *HandlerServer) Connect(conn net.Conn, req *Request) (*Connection, error) {
+	// Create new connection, and waiting message
+	c := NewConnection(conn, 4096)
+	if err := c.handshake(req); err != nil {
+		return nil, err
+	}
+	go c.Wait(hs.server.broadcast, hs.server.join, hs.server.manager)
+	return c, nil
+}
+
+func (hs *HandlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	conn, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		panic(err)
+	}
+
+	// make header
+	headers := make(map[string]string)
+	for k, v := range r.Header {
+		headers[k] = v[0]
+	}
+
+	c, err := hs.Connect(conn, &Request{
+		Method:  r.Method,
+		Path:    r.URL.Path,
+		Version: r.Proto,
+		Headers: headers,
+	})
+
+	if err != nil {
+		code := http.StatusForbidden
+		fmt.Fprintf(buf, "HTTP/1.1 %03d %s\r\n", code, http.StatusText(code))
+		buf.WriteString("\r\n")
+		buf.Flush()
+		conn.Close()
+		return
+	}
+
+	hs.callback(c)
 }
