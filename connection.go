@@ -35,7 +35,7 @@ type Connection struct {
 	Close chan struct{}
 
 	// broadcasting channnel ( supply from Server )
-	broadcast chan Readable
+	broadcast chan *Frame
 
 	// leave channnel ( supply from Server )
 	manager chan *Connection
@@ -73,7 +73,7 @@ func NewConnection(conn net.Conn, maxDataSize int) *Connection {
 }
 
 // Waiting incoming message, receive channel.
-func (c *Connection) Wait(broadCast chan Readable, join, manager chan *Connection) {
+func (c *Connection) Wait(broadCast chan *Frame, join, manager chan *Connection) {
 	c.broadcast = broadCast
 	c.manager = manager
 	c.join = join
@@ -95,7 +95,7 @@ OUTER:
 			// When state is INITIALIZE, process handshake.
 			case INITIALIZE:
 				req := NewRequest(string(msg.getData()))
-				if err := c.handshake(req); err == nil {
+				if err := c.handshake(req, false); err == nil {
 					c.join <- c
 				}
 			// When state is CONNECTED, incoming message.
@@ -134,6 +134,7 @@ OUTER:
 		case <-c.Close:
 			break OUTER
 		}
+
 		c.conn.SetDeadline(time.Now().Add(1 * time.Minute))
 	}
 }
@@ -157,16 +158,20 @@ func (c *Connection) readSocket() {
 }
 
 // Processing handshake.
-func (c *Connection) handshake(request *Request) error {
+func (c *Connection) handshake(request *Request, manual bool) error {
 	c.state = OPENING
 
-	// Check valid handshke request
+	// Check valid handshake request
 	if !request.isValid() {
+		fmt.Println(request)
 		c.Close <- struct{}{}
 		return errors.New("Invalid handshake request")
 	}
-	response := NewResponse(request)
-	c.Write <- response
+
+	if !manual {
+		response := NewResponse(request)
+		c.Write <- response
+	}
 	// state changed to CONNECTED
 	c.state = CONNECTED
 	return nil
@@ -190,7 +195,7 @@ func (c *Connection) handleFrame(frame *Frame) error {
 			return err
 		}
 		for _, frame := range frames {
-			c.broadcast <- NewMessage(frame.toFrameBytes())
+			c.broadcast <- frame
 		}
 
 	// closing frame
@@ -199,7 +204,7 @@ func (c *Connection) handleFrame(frame *Frame) error {
 
 	// ping frame
 	case 9:
-		c.broadcast <- NewMessage(NewPongFrame().toFrameBytes())
+		c.broadcast <- NewPongFrame()
 	}
 
 	return nil

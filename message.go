@@ -17,3 +17,7 @@ func NewMessage(data []byte) *Message {
 func (m *Message) getData() []byte {
 	return []byte(m.Data)
 }
+
+func (m *Message) String() string {
+	return m.Data
+}

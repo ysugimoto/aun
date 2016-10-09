@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -28,7 +29,7 @@ type Server struct {
 	maxDataSize int
 
 	// Broadcast channel
-	broadcast chan Readable
+	broadcast chan *Frame
 
 	// Client closing manager channel
 	manager chan *Connection
@@ -46,6 +47,8 @@ type Server struct {
 	OnMessage MessageHandler
 	OnClose   CloseHandler
 	OnConnect ConnectHandler
+
+	terminate chan os.Signal
 }
 
 // Create New WebSocket Server.
@@ -58,7 +61,7 @@ func NewServer(host string, port int) (*Server, error) {
 	return &Server{
 		addr:        addr,
 		connections: make(map[*Connection]bool),
-		broadcast:   make(chan Readable),
+		broadcast:   make(chan *Frame),
 		manager:     make(chan *Connection),
 		join:        make(chan *Connection),
 		mutex:       new(sync.Mutex),
@@ -113,23 +116,27 @@ func (s *Server) serve(maxDataSize int) {
 	// Loop and accepting client connection.
 	// Running with goroutine
 	go s.acceptLoop(maxDataSize)
-
 	// observe signal event
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL)
 
+	s.terminate = make(chan os.Signal, 1)
+	signal.Notify(s.terminate, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL)
+
+	s.wait()
+}
+
+func (s *Server) wait() {
 MAIN:
 	// Channel selection
 	for {
 		select {
 		// handle the broadcast
-		case msg := <-s.broadcast:
+		case frame := <-s.broadcast:
 			s.mutex.Lock()
 			if s.OnMessage != nil {
-				s.OnMessage(msg.getData())
+				s.OnMessage(frame.PayloadData)
 			}
 			for c, _ := range s.connections {
-				c.Write <- msg
+				c.Write <- NewMessage(frame.toFrameBytes())
 			}
 			s.mutex.Unlock()
 
@@ -156,7 +163,7 @@ MAIN:
 		case <-s.Exit:
 			break MAIN
 
-		case sig := <-signalChan:
+		case sig := <-s.terminate:
 			s.handleSignal(sig)
 		}
 	}
@@ -173,6 +180,7 @@ func (s *Server) acceptLoop(maxDataSize int) {
 
 		// Create new connection, and waiting message
 		c := NewConnection(conn, maxDataSize)
+		s.join <- c
 		go c.Wait(s.broadcast, s.join, s.manager)
 	}
 }
@@ -199,7 +207,7 @@ func (s *Server) Notify(message []byte) error {
 		return err
 	}
 	for _, frame := range frames {
-		s.broadcast <- NewMessage(frame.toFrameBytes())
+		s.broadcast <- frame
 	}
 
 	return nil
@@ -213,38 +221,48 @@ func (s *Server) NotifyTo(message []byte, to *Connection) error {
 		return errors.New("Client not connected, abort send message.")
 	}
 
-	to.Write <- NewMessage(message)
+	frames, err := BuildFrame(message, s.maxDataSize)
+	if err != nil {
+		return err
+	}
+	for _, f := range frames {
+		to.Write <- NewMessage(f.toFrameBytes())
+	}
 
 	return nil
 }
 
 type HandlerServer struct {
-	server   *Server
+	*Server
 	callback HandlerCallback
 }
 type HandlerCallback func(*Connection)
 
 func NewHandlerServer(handler HandlerCallback) *HandlerServer {
-	return &HandlerServer{
-		callback: handler,
-		server: &Server{
+	hs := &HandlerServer{
+		Server: &Server{
 			connections: make(map[*Connection]bool),
-			broadcast:   make(chan Readable),
+			broadcast:   make(chan *Frame),
 			manager:     make(chan *Connection),
 			join:        make(chan *Connection),
 			mutex:       new(sync.Mutex),
-			Exit:        make(chan int, 1),
+			Exit:        make(chan int, 2),
+			maxDataSize: 4096,
 		},
+		callback: handler,
 	}
+	go hs.wait()
+	return hs
 }
 
 func (hs *HandlerServer) Connect(conn net.Conn, req *Request) (*Connection, error) {
 	// Create new connection, and waiting message
 	c := NewConnection(conn, 4096)
-	if err := c.handshake(req); err != nil {
+	if err := c.handshake(req, true); err != nil {
 		return nil, err
 	}
-	go c.Wait(hs.server.broadcast, hs.server.join, hs.server.manager)
+	go c.Wait(hs.broadcast, hs.join, hs.manager)
+	hs.join <- c
 	return c, nil
 }
 
@@ -257,15 +275,24 @@ func (hs *HandlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// make header
 	headers := make(map[string]string)
 	for k, v := range r.Header {
+		// http.Hijacker will change header to lowercase?
+		if strings.Contains(k, "Websocket") {
+			k = strings.Replace(k, "Websocket", "WebSocket", -1)
+		}
 		headers[k] = v[0]
 	}
+	// fix host header
+	if _, ok := headers["Host"]; !ok {
+		headers["Host"] = r.URL.Host
+	}
 
-	c, err := hs.Connect(conn, &Request{
+	req := &Request{
 		Method:  r.Method,
 		Path:    r.URL.Path,
 		Version: r.Proto,
 		Headers: headers,
-	})
+	}
+	c, err := hs.Connect(conn, req)
 
 	if err != nil {
 		code := http.StatusForbidden
@@ -275,6 +302,10 @@ func (hs *HandlerServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+
+	response := NewResponse(req)
+	fmt.Fprint(buf, string(response.getData()))
+	buf.Flush()
 
 	hs.callback(c)
 }

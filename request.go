@@ -109,7 +109,7 @@ func (r *Request) isValid() bool {
 		return false
 	}
 
-	// Request must have "Sec-WebSocket-Version" header.
+	// Request must have "Sec-Websocket-Version" header.
 	if !r.has("Sec-WebSocket-Version") {
 		fmt.Println(8)
 		return false
